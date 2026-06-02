@@ -1,121 +1,139 @@
 import streamlit as st
-import pandas as pd
-from datetime import datetime
-import os
+from google import genai
+from google.genai import types
 
-# -----------------------------
-# 기본 설정
-# -----------------------------
+# 페이지 설정
 st.set_page_config(
-    page_title="학생 집중 관리 앱",
-    page_icon="📚",
+    page_title="연애상담 챗봇",
+    page_icon="💝",
     layout="centered"
 )
 
-st.title("📚 학생 집중 관리 앱")
-st.write("학생들의 공부 시간과 집중도를 관리해보세요!")
+st.title("💝 AI 연애상담 챗봇")
+st.caption("연애 고민을 편하게 이야기해보세요.")
 
-# -----------------------------
-# 데이터 파일 설정
-# -----------------------------
-DATA_FILE = "study_log.csv"
-
-# CSV 파일 생성
-if not os.path.exists(DATA_FILE):
-    empty_df = pd.DataFrame(
-        columns=["날짜", "과목", "공부시간", "집중도"]
-    )
-    empty_df.to_csv(DATA_FILE, index=False)
-
-# CSV 읽기
+# API 키 불러오기
 try:
-    df = pd.read_csv(DATA_FILE)
-except:
-    df = pd.DataFrame(
-        columns=["날짜", "과목", "공부시간", "집중도"]
+    api_key = st.secrets["GEMINI_API_KEY"]
+except Exception:
+    st.error("GEMINI_API_KEY가 Secrets에 설정되지 않았습니다.")
+    st.stop()
+
+# Gemini Client 생성
+try:
+    client = genai.Client(api_key=api_key)
+except Exception as e:
+    st.error(f"Gemini 초기화 실패: {e}")
+    st.stop()
+
+# 채팅 기록 초기화
+if "messages" not in st.session_state:
+    st.session_state.messages = [
+        {
+            "role": "assistant",
+            "content": (
+                "안녕하세요 😊\n\n"
+                "저는 연애상담 AI입니다.\n"
+                "연애, 썸, 이별, 재회, 인간관계 고민 등을 편하게 이야기해주세요."
+            )
+        }
+    ]
+
+# 기존 대화 표시
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+
+# 사용자 입력
+if prompt := st.chat_input("연애 고민을 입력하세요..."):
+
+    # 사용자 메시지 저장
+    st.session_state.messages.append(
+        {"role": "user", "content": prompt}
     )
 
-# -----------------------------
-# 공부 기록 입력
-# -----------------------------
-st.header("✏️ 공부 기록 추가")
+    with st.chat_message("user"):
+        st.markdown(prompt)
 
-subject = st.selectbox(
-    "과목 선택",
-    ["국어", "영어", "수학", "과학", "사회", "코딩", "기타"]
-)
+    # Gemini 호출
+    with st.chat_message("assistant"):
+        with st.spinner("생각 중..."):
 
-study_time = st.slider(
-    "공부 시간 (분)",
-    min_value=10,
-    max_value=300,
-    value=60
-)
+            try:
+                # 시스템 프롬프트
+                system_prompt = """
+                당신은 공감 능력이 뛰어난 연애상담 전문가입니다.
 
-focus_score = st.slider(
-    "집중도 점수",
-    min_value=1,
-    max_value=10,
-    value=7
-)
+                원칙:
+                - 사용자의 감정을 존중한다.
+                - 현실적이고 건강한 조언을 제공한다.
+                - 강요하지 않는다.
+                - 지나친 확신을 피한다.
+                - 친절하고 자연스러운 한국어로 답변한다.
+                """
 
-# 저장 버튼
-if st.button("저장하기"):
+                # 대화 이력 구성
+                conversation_text = system_prompt + "\n\n"
 
-    new_row = {
-        "날짜": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "과목": subject,
-        "공부시간": study_time,
-        "집중도": focus_score
-    }
+                for m in st.session_state.messages:
+                    role = "사용자" if m["role"] == "user" else "상담사"
+                    conversation_text += f"{role}: {m['content']}\n"
 
-    new_df = pd.DataFrame([new_row])
+                response = client.models.generate_content(
+                    model="gemini-2.5-flash-lite",
+                    contents=conversation_text,
+                    config=types.GenerateContentConfig(
+                        temperature=0.8,
+                        max_output_tokens=1000,
+                    )
+                )
 
-    df = pd.concat([df, new_df], ignore_index=True)
+                answer = response.text
 
-    df.to_csv(DATA_FILE, index=False)
+                st.markdown(answer)
 
-    st.success("✅ 공부 기록이 저장되었습니다!")
+                st.session_state.messages.append(
+                    {
+                        "role": "assistant",
+                        "content": answer
+                    }
+                )
 
-# -----------------------------
-# 통계
-# -----------------------------
-st.header("📊 공부 통계")
+            except Exception as e:
+                error_msg = (
+                    "죄송합니다. 답변 생성 중 오류가 발생했습니다.\n\n"
+                    f"오류 내용: {str(e)}"
+                )
 
-if len(df) > 0:
+                st.error(error_msg)
 
-    total_time = int(df["공부시간"].sum())
-    average_focus = round(df["집중도"].mean(), 1)
+                st.session_state.messages.append(
+                    {
+                        "role": "assistant",
+                        "content": error_msg
+                    }
+                )
 
-    col1, col2 = st.columns(2)
+# 사이드바
+with st.sidebar:
+    st.header("설정")
 
-    col1.metric("총 공부 시간", f"{total_time}분")
-    col2.metric("평균 집중도", f"{average_focus}/10")
+    if st.button("대화 초기화"):
+        st.session_state.messages = [
+            {
+                "role": "assistant",
+                "content": (
+                    "안녕하세요 😊\n\n"
+                    "저는 연애상담 AI입니다.\n"
+                    "무슨 고민이 있으신가요?"
+                )
+            }
+        ]
+        st.rerun()
 
-    st.subheader("과목별 공부 시간")
+    st.divider()
 
-    chart_data = df.groupby("과목")["공부시간"].sum()
-
-    st.bar_chart(chart_data)
-
-    st.subheader("최근 공부 기록")
-
-    st.dataframe(df[::-1], use_container_width=True)
-
-else:
-    st.info("아직 저장된 데이터가 없습니다.")
-
-# -----------------------------
-# 집중 팁
-# -----------------------------
-st.header("🔥 집중 팁")
-
-tips = [
-    "25분 집중 후 5분 쉬기",
-    "휴대폰 멀리 두기",
-    "오늘 목표 먼저 정하기",
-    "조용한 환경 만들기"
-]
-
-for tip in tips:
-    st.write("✅", tip)
+    st.info(
+        "이 서비스는 전문 상담을 대체하지 않습니다.\n\n"
+        "심각한 정신건강 문제나 위기 상황에서는 전문가의 도움을 받으세요."
+    )
